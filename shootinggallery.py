@@ -1,193 +1,171 @@
 import pygame
 import random
-import time
 import math
+import os
+import time
 
 # Initialize Pygame
 pygame.init()
-
-# Initialize the Pygame mixer for sound
 pygame.mixer.init()
 
-# Define constants
-WIDTH, HEIGHT = 600, 400
+# Screen settings
+WIDTH, HEIGHT = 800, 600
+screen = pygame.display.set_mode((WIDTH, HEIGHT))
+pygame.display.set_caption("Realistic Zombie Shooting Gallery")
+
+# Colors
 WHITE = (255, 255, 255)
 BLACK = (0, 0, 0)
 RED = (255, 0, 0)
-BUTTON_COLOR = (0, 0, 255)  # Blue button color
-BUTTON_HOVER_COLOR = (0, 100, 255)  # Lighter blue for hover effect
 
-# Set up the screen
-screen = pygame.display.set_mode((WIDTH, HEIGHT))
-pygame.display.set_caption("Zombie Shooting Gallery")
+# Load assets
+assets = {}
+asset_files = {
+    "tank": "tank.jpg",
+    "zombie1": "zombie1.jpeg",
+    "zombie2": "zombie2.jpeg",
+    "zombie3": "zombie3.jpeg",
+    "background": "zombies.jpg",
+    "gunshot": "gunshot.mp3"
+}
 
-# Load images
-try:
-    zombie_image = pygame.image.load("zombie.jpg")  # Changed to zombie.jpg
-    background_image = pygame.image.load("zombies.jpg")  # Changed background to zombies.jpg
-    arrow_image = pygame.image.load("arrow.png")  # Load arrow image
-except pygame.error as e:
-    print("Error loading image: ", e)
+for key, file in asset_files.items():
+    if os.path.exists(file):
+        try:
+            if file.endswith(".mp3"):
+                assets[key] = pygame.mixer.Sound(file)
+            else:
+                assets[key] = pygame.image.load(file)
+        except pygame.error as e:
+            print(f"Error loading {file}: {e}")
+            assets[key] = None
+    else:
+        print(f"Warning: {file} not found!")
+        assets[key] = None
 
-# Scale images if needed (optional)
-zombie_image = pygame.transform.scale(zombie_image, (50, 50))  # Resize the zombie image to 50x50
-background_image = pygame.transform.scale(background_image, (WIDTH, HEIGHT))  # Resize background to screen size
-arrow_image = pygame.transform.scale(arrow_image, (30, 30))  # Resize arrow image
+# Scale images
+if assets["tank"]:
+    assets["tank"] = pygame.transform.scale(assets["tank"], (50, 50))
+for key in ["zombie1", "zombie2", "zombie3"]:
+    if assets.get(key):
+        assets[key] = pygame.transform.scale(assets[key], (50, 50))
+if assets["background"]:
+    assets["background"] = pygame.transform.scale(assets["background"], (WIDTH, HEIGHT))
 
-# Load the sound effect
-try:
-    hit_sound = pygame.mixer.Sound("sound.mp3")  # Load your MP3 file
-except pygame.error as e:
-    print("Error loading sound: ", e)
+# Game settings
+difficulty_levels = {
+    "Easy": (1, 10),
+    "Medium": (2, 15),
+    "Hard": (3, 20)
+}
 
-# Define game variables
-zombies = []
-num_zombies = 8  # Total number of zombies (targets)
-time_limit = 30000  # 30 seconds limit
-score = 0
-start_ticks = 0  # Start time for the timer (initialized after game starts)
-
-# Set up the timer and score
-zombie_speed = 3  # Speed of zombies movement
-paused = False  # Pause state
-
-# Main Menu Drawing Function
-def draw_main_menu():
-    screen.fill(WHITE)
-    font = pygame.font.Font(None, 48)
+# Obstacle class
+class Obstacle:
+    def __init__(self, x, y, width, height, moving=False):
+        self.rect = pygame.Rect(x, y, width, height)
+        self.moving = moving
+        self.direction = 1 if moving else 0
     
-    title_text = font.render("Zombie Shooting Gallery", True, BLACK)
-    screen.blit(title_text, (WIDTH // 2 - title_text.get_width() // 2, HEIGHT // 3))
+    def move(self):
+        if self.moving:
+            self.rect.x += self.direction * 3
+            if self.rect.x <= 50 or self.rect.x >= WIDTH - 50:
+                self.direction *= -1
+    
+    def draw(self):
+        pygame.draw.rect(screen, RED, self.rect)
 
-    # Start Game Button
-    start_button = pygame.Rect(WIDTH // 2 - 100, HEIGHT // 2, 200, 50)
-    mouse_x, mouse_y = pygame.mouse.get_pos()
-    if start_button.collidepoint(mouse_x, mouse_y):
-        pygame.draw.rect(screen, BUTTON_HOVER_COLOR, start_button)  # Highlight button on hover
-    else:
-        pygame.draw.rect(screen, BUTTON_COLOR, start_button)
-    start_text = font.render("Start Game", True, WHITE)
-    screen.blit(start_text, (start_button.x + start_button.width // 2 - start_text.get_width() // 2, start_button.y + start_button.height // 4))
+# Show difficulty selection
+def show_menu():
+    font = pygame.font.Font(None, 50)
+    selected = 0
+    difficulties = list(difficulty_levels.keys())
 
-    # Quit Game Button
-    quit_button = pygame.Rect(WIDTH // 2 - 100, HEIGHT // 2 + 70, 200, 50)
-    if quit_button.collidepoint(mouse_x, mouse_y):
-        pygame.draw.rect(screen, BUTTON_HOVER_COLOR, quit_button)  # Highlight button on hover
-    else:
-        pygame.draw.rect(screen, BUTTON_COLOR, quit_button)
-    quit_text = font.render("Quit Game", True, WHITE)
-    screen.blit(quit_text, (quit_button.x + quit_button.width // 2 - quit_text.get_width() // 2, quit_button.y + quit_button.height // 4))
-
-    pygame.display.flip()
-
-    return start_button, quit_button
-
-# Calculate the angle between the arrow and the zombie
-def get_angle_to_zombie(arrow_pos, zombie_pos):
-    dx = zombie_pos[0] - arrow_pos[0]
-    dy = zombie_pos[1] - arrow_pos[1]
-    angle = math.atan2(dy, dx)
-    return angle
-
-# Game Loop Function
-def game_loop():
-    global score, zombies, start_ticks, paused
-
-    # Reset the game variables for a new game
-    score = 0
-    zombies = [pygame.Rect(random.randint(50, WIDTH - 50), random.randint(50, HEIGHT - 50), 50, 50) for _ in range(num_zombies)]
-    start_ticks = pygame.time.get_ticks()  # Start the timer
-
-    running = True
-    while running:
-        # Draw the background image
-        screen.blit(background_image, (0, 0))  # Draw the new background (zombies.jpg) at the top-left corner
-
-        if paused:
-            font = pygame.font.Font(None, 48)
-            pause_text = font.render("Paused", True, BLACK)
-            screen.blit(pause_text, (WIDTH // 2 - pause_text.get_width() // 2, HEIGHT // 3))
-        else:
-            # Check time limit
-            elapsed_time = pygame.time.get_ticks() - start_ticks
-            remaining_time = (time_limit - elapsed_time) / 1000  # Remaining time in seconds
-
-            for event in pygame.event.get():
-                if event.type == pygame.QUIT:
-                    running = False
-
-                if event.type == pygame.MOUSEBUTTONDOWN:
-                    # Check for a collision with any zombie
-                    for zombie in zombies:
-                        if zombie.collidepoint(event.pos):
-                            score += 1
-                            zombie.x = random.randint(50, WIDTH - 50)  # Move zombie to a new random position after being hit
-                            zombie.y = random.randint(50, HEIGHT - 50)
-                            hit_sound.play()  # Play the sound when the zombie is hit
-
-                if event.type == pygame.KEYDOWN:
-                    if event.key == pygame.K_p:  # Pause when the 'P' key is pressed
-                        paused = not paused  # Toggle pause state
-
-            # Get the position of the mouse
-            mouse_x, mouse_y = pygame.mouse.get_pos()
-
-            # Draw the arrow and point it towards the closest zombie
-            closest_zombie = min(zombies, key=lambda z: math.hypot(z.centerx - mouse_x, z.centery - mouse_y))
-            arrow_angle = get_angle_to_zombie((mouse_x, mouse_y), closest_zombie.center)
-
-            # Rotate the arrow image to point in the right direction
-            rotated_arrow = pygame.transform.rotate(arrow_image, math.degrees(arrow_angle))
-            arrow_rect = rotated_arrow.get_rect(center=(mouse_x, mouse_y))
-
-            screen.blit(rotated_arrow, arrow_rect)  # Draw the rotated arrow at the mouse position
-
-            # Draw the zombies
-            for zombie in zombies:
-                screen.blit(zombie_image, zombie)  # Use the zombie's rect to position the image
-
-            # Display score
-            font = pygame.font.Font(None, 36)
-            score_text = font.render(f"Score: {score}", True, BLACK)
-            screen.blit(score_text, (10, 10))
-
-            # Display remaining time
-            time_text = font.render(f"Time Left: {int(remaining_time)}s", True, BLACK)
-            screen.blit(time_text, (WIDTH - 150, 10))
-
-            # Check if the time limit has been reached
-            if elapsed_time > time_limit:
-                # Time's up, display game over screen
-                game_over_text = font.render("Game Over!", True, BLACK)
-                final_score_text = font.render(f"Final Score: {score}", True, BLACK)
-                screen.blit(game_over_text, (WIDTH // 2 - game_over_text.get_width() // 2, HEIGHT // 3))
-                screen.blit(final_score_text, (WIDTH // 2 - final_score_text.get_width() // 2, HEIGHT // 2))
-
-                pygame.display.flip()
-                pygame.time.delay(2000)  # Show game over for 2 seconds
-                running = False  # End the game
-
+    while True:
+        screen.fill(BLACK)
+        title = font.render("Select Difficulty", True, WHITE)
+        screen.blit(title, (WIDTH // 2 - title.get_width() // 2, 100))
+        
+        for i, difficulty in enumerate(difficulties):
+            color = RED if i == selected else WHITE
+            text = font.render(difficulty, True, color)
+            screen.blit(text, (WIDTH // 2 - text.get_width() // 2, 200 + i * 50))
+        
         pygame.display.flip()
-        pygame.time.delay(30)
+        
+        for event in pygame.event.get():
+            if event.type == pygame.QUIT:
+                pygame.quit()
+                exit()
+            if event.type == pygame.KEYDOWN:
+                if event.key == pygame.K_UP:
+                    selected = (selected - 1) % len(difficulties)
+                if event.key == pygame.K_DOWN:
+                    selected = (selected + 1) % len(difficulties)
+                if event.key == pygame.K_RETURN:
+                    return difficulties[selected]
 
-    pygame.quit()
-
-# Main Function
 def main():
+    mode = show_menu()
+    zombie_speed, zombie_count = difficulty_levels[mode]
+    
+    tank_x, tank_y = WIDTH // 2, HEIGHT - 60
+    bullets = []
+    score = 0
+    start_time = time.time()
+    font = pygame.font.Font(None, 36)
+    zombies = [
+        {"rect": pygame.Rect(random.randint(50, WIDTH - 50), random.randint(50, HEIGHT // 2), 50, 50), 
+         "speed": random.uniform(1, zombie_speed), 
+         "type": random.choice(["zombie1", "zombie2", "zombie3"])} 
+        for _ in range(zombie_count)
+    ]
+    obstacles = [Obstacle(random.randint(50, WIDTH - 100), random.randint(100, HEIGHT - 200), 50, 20, True) for _ in range(5)]
     running = True
+
     while running:
-        start_button, quit_button = draw_main_menu()
+        screen.fill(BLACK)
+        if assets["background"]:
+            screen.blit(assets["background"], (0, 0))
 
         for event in pygame.event.get():
             if event.type == pygame.QUIT:
-                running = False
+                pygame.quit()
+                exit()
+            if event.type == pygame.KEYDOWN:
+                if event.key == pygame.K_LEFT:
+                    tank_x = max(0, tank_x - 10)
+                if event.key == pygame.K_RIGHT:
+                    tank_x = min(WIDTH - 50, tank_x + 10)
             if event.type == pygame.MOUSEBUTTONDOWN:
-                if start_button.collidepoint(event.pos):
-                    game_loop()  # Start the game
-                elif quit_button.collidepoint(event.pos):
-                    running = False  # Quit the game
+                bullets.append({"x": tank_x + 25, "y": tank_y, "angle": math.atan2(pygame.mouse.get_pos()[1] - tank_y, pygame.mouse.get_pos()[0] - tank_x)})
+                if assets["gunshot"]:
+                    assets["gunshot"].play()
 
-    pygame.quit()
+        for bullet in bullets[:]:
+            bullet["x"] += 10 * math.cos(bullet["angle"])
+            bullet["y"] += 10 * math.sin(bullet["angle"])
+            pygame.draw.circle(screen, RED, (int(bullet["x"]), int(bullet["y"])), 5)
+            if bullet["x"] < 0 or bullet["x"] > WIDTH or bullet["y"] < 0 or bullet["y"] > HEIGHT:
+                bullets.remove(bullet)
+
+        for zombie in zombies[:]:
+            zombie['rect'].y += zombie['speed']
+            screen.blit(assets[zombie['type']], zombie['rect'])
+            for bullet in bullets[:]:
+                if zombie['rect'].collidepoint(bullet['x'], bullet['y']):
+                    score += 1
+                    bullets.remove(bullet)
+                    zombies.remove(zombie)
+
+        for obstacle in obstacles:
+            obstacle.move()
+            obstacle.draw()
+        
+        screen.blit(font.render(f"Score: {score}", True, WHITE), (10, 10))
+        screen.blit(assets["tank"], (tank_x, tank_y))
+        pygame.display.flip()
+        pygame.time.delay(30)
 
 if __name__ == "__main__":
     main()
